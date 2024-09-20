@@ -1,0 +1,25 @@
+
+### `LICENSE`
+
+This file should contain the Apache 2.0 License text. You can get it from [Apache's official website](https://www.apache.org/licenses/LICENSE-2.0).
+
+### `setup.py`
+
+```python
+from setuptools import setup, find_packages
+
+setup(
+    name='bitwave',
+    version='0.1',
+    packages=find_packages(),
+    install_requires=[
+        'asyncio',
+        'tkinter',
+        # Add other dependencies here
+    ],
+    entry_points={
+        'console_scripts': [
+            'bitwave=pieces.client:main',
+        ],
+    },
+)
