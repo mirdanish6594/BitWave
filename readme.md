@@ -1,6 +1,6 @@
 # Bitwave
 
-Bitwave is a BitTorrent client implemented in Python 3.5 using `asyncio`. It includes a graphical user interface (GUI) to interact with the client. The core functionality includes parsing `.torrent` files, connecting to peers, and downloading files.
+Bitwave is a BitTorrent client implemented in Python using `asyncio`. It includes a graphical user interface (GUI) to interact with the client. The core functionality includes parsing `.torrent` files, connecting to peers, and downloading files.
 
 ## Project Structure
 
@@ -11,7 +11,7 @@ Bitwave is a BitTorrent client implemented in Python 3.5 using `asyncio`. It inc
 
 ## Requirements
 
-- Python 3.5
+- Python 
 - `asyncio`
 - `tkinter`
 - `bencoding`
