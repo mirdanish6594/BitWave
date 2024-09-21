@@ -8,7 +8,7 @@ import struct
 class Tracker:
     def __init__(self, torrent):
         self.torrent = torrent  # Store the torrent object
-        self.url = 'udp://tracker.coppersurfer.tk:6969'
+        self.url = 'udp://tracker.opentrackr.org:1337'
         self.peer_id = self.generate_peer_id()  # Generate peer ID on initialization
 
     def generate_peer_id(self):
@@ -96,25 +96,27 @@ class Tracker:
         }
 
     def parse_udp_response(self, response_data):
-        print(f"Raw response: {response_data}") 
-        if len(response_data) < 20:
-            raise Exception("Invalid UDP response")
-        action, transaction_id = struct.unpack('!I', response_data[:4])[0]
-        if action != 0:  # 0 indicates a successful response
-         raise Exception(f"Unexpected action in response: {action}")
-        
-        peer_list = []
-        peer_count = (len(response_data) - 8) // 6
-        for i in range(peer_count):
-            peer = response_data[8 + i * 6: 8 + (i + 1) * 6]
-            ip = peer[:4]
-            port = peer[4:]
-            peer_list.append((self.bytes_to_ip(ip), self.bytes_to_port(port)))
+       print(f"Raw response: {response_data}") 
+       if len(response_data) < 20:
+           raise Exception(f"Invalid UDP response: response too short (length: {len(response_data)})")
+    
+       action, transaction_id = struct.unpack('!I', response_data[:4])[0]
+       if action != 0:  # 0 indicates a successful response
+           raise Exception(f"Unexpected action in response: {action}")
 
-        return {
-            'interval': 30,  # Default interval for UDP response
-            'peers': peer_list,
-        }
+       peer_list = []
+       peer_count = (len(response_data) - 8) // 6
+       for i in range(peer_count):
+           peer = response_data[8 + i * 6: 8 + (i + 1) * 6]
+           ip = peer[:4]
+           port = peer[4:]
+           peer_list.append((self.bytes_to_ip(ip), self.bytes_to_port(port)))
+
+       return {
+           'interval': 30,  # Default interval for UDP response
+           'peers': peer_list,
+       }
+
 
     def decode_peers(self, peers):
         # Assuming compact format for HTTP response
