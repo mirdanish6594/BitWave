@@ -5,6 +5,7 @@ import os
 import logging
 import threading
 import asyncio
+import time # <-- Import the time module
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
@@ -25,7 +26,6 @@ app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_DIR
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 socketio = SocketIO(app, async_mode='threading')
 
-# --- NEW: Create directories on startup, outside of the main block ---
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 if not os.path.exists(DOWNLOAD_DIR):
@@ -85,6 +85,9 @@ def upload_file():
         filename = secure_filename(file.filename)
         torrent_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(torrent_path)
+        
+        # --- NEW: Add a small delay to prevent race condition ---
+        time.sleep(0.1) 
         
         info_hash = get_torrent_info_hash(torrent_path)
         if not info_hash:
