@@ -5,7 +5,7 @@ import os
 import logging
 import threading
 import asyncio
-import time # <-- Import the time module
+import time
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
@@ -17,15 +17,17 @@ from bencode import bdecode, bencode
 # --- App Configuration ---
 app = Flask(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')
-DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
+# --- NEW: Point all storage to the persistent disk mount path ---
+STORAGE_DIR = '/var/data'
+UPLOAD_DIR = os.path.join(STORAGE_DIR, 'uploads')
+DOWNLOAD_DIR = os.path.join(STORAGE_DIR, 'downloads')
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_DIR
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_DIR
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 socketio = SocketIO(app, async_mode='threading')
 
+# Create directories on startup
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 if not os.path.exists(DOWNLOAD_DIR):
@@ -86,7 +88,6 @@ def upload_file():
         torrent_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(torrent_path)
         
-        # --- NEW: Add a small delay to prevent race condition ---
         time.sleep(0.1) 
         
         info_hash = get_torrent_info_hash(torrent_path)
