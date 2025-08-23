@@ -8,7 +8,9 @@ services:
     startCommand: "gunicorn --worker-class gevent -w 1 --bind 0.0.0.0:$PORT app:socketio"
     envVars:
       - key: PYTHON_VERSION
-        # Pinning to a highly stable and compatible Python version
+        value: 3.11.4
+      # Adding another key for extra certainty
+      - key: PYTHON
         value: 3.11.4
     # A Persistent Disk to store our downloads
     disks:
