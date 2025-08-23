@@ -7,6 +7,11 @@ import logging
 import asyncio
 import redis
 import json
+import time
+
+# IMPORTANT: eventlet must be patched at the very top of the entry point
+import eventlet
+eventlet.monkey_patch()
 
 from downloader import Downloader
 
@@ -18,51 +23,58 @@ logging.basicConfig(
 )
 
 # --- Redis Connection ---
-# Render provides the REDIS_URL environment variable automatically.
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
 redis_client = redis.from_url(REDIS_URL)
 
 class MockSocketIO:
     """
-    A mock SocketIO object that publishes messages to a Redis channel
-    instead of emitting them over a WebSocket.
+    A mock SocketIO object that publishes messages to a Redis channel.
     """
     def __init__(self, client):
         self.client = client
 
     def emit(self, event, data):
-        # We publish the event and data as a JSON string to the 'status_updates' channel
-        message = json.dumps({'event': event, 'data': data})
-        self.client.publish('status_updates', message)
-        logging.debug(f"Published to Redis: {message}")
+        try:
+            message = json.dumps({'event': event, 'data': data})
+            self.client.publish('status_updates', message)
+        except Exception as e:
+            logging.error(f"Failed to publish to Redis: {e}")
 
 async def main():
-    """The main worker loop."""
-    logging.info("Background worker started. Listening for jobs on Redis...")
+    """The main worker loop with a resilient connection."""
+    logging.info("Background worker started.")
     mock_socketio = MockSocketIO(redis_client)
-    pubsub = redis_client.pubsub()
-    pubsub.subscribe('download_jobs')
-
-    for message in pubsub.listen():
-        if message['type'] == 'message':
-            torrent_path = message['data'].decode('utf-8')
-            logging.info(f"Received job to download: {torrent_path}")
+    
+    while True:
+        try:
+            logging.info("Connecting to Redis...")
+            pubsub = redis_client.pubsub()
+            pubsub.subscribe('download_jobs')
+            logging.info("Worker is listening for jobs on Redis.")
             
-            try:
-                # We run the existing downloader logic here.
-                # It will use the MockSocketIO to send progress back via Redis.
-                downloader = Downloader(torrent_path, mock_socketio)
-                await downloader.start()
-            except Exception as e:
-                logging.error(f"Download failed for {torrent_path}: {e}", exc_info=True)
-            finally:
-                # Clean up the torrent file after the download attempt is finished
-                if os.path.exists(torrent_path):
+            for message in pubsub.listen():
+                if message['type'] == 'message':
+                    torrent_path = message['data'].decode('utf-8')
+                    logging.info(f"Received job to download: {torrent_path}")
+                    
                     try:
-                        os.remove(torrent_path)
-                        logging.info(f"Cleaned up torrent file: {torrent_path}")
-                    except OSError as e:
-                        logging.error(f"Error cleaning up torrent file {torrent_path}: {e}")
+                        downloader = Downloader(torrent_path, mock_socketio)
+                        await downloader.start()
+                    except Exception as e:
+                        logging.error(f"Download failed for {torrent_path}: {e}", exc_info=True)
+                    finally:
+                        if os.path.exists(torrent_path):
+                            try:
+                                os.remove(torrent_path)
+                                logging.info(f"Cleaned up torrent file: {torrent_path}")
+                            except OSError as e:
+                                logging.error(f"Error cleaning up torrent file {torrent_path}: {e}")
+        except redis.exceptions.ConnectionError:
+            logging.error("Redis connection lost. Reconnecting in 5 seconds...")
+            time.sleep(5)
+        except Exception as e:
+            logging.error(f"An unexpected error occurred in the worker: {e}. Restarting in 5 seconds...")
+            time.sleep(5)
 
 if __name__ == '__main__':
     asyncio.run(main())
