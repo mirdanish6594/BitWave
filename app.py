@@ -1,18 +1,23 @@
 # app.py
 # This is now just the web server. It handles uploads and relays status updates.
 
+# IMPORTANT: eventlet must be patched at the very top of the entry point
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import logging
-import threading
 import json
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
 import redis
+import time
 
 # --- App Configuration ---
 app = Flask(__name__)
-socketio = SocketIO(app, async_mode='threading')
+# The async_mode must be 'eventlet' to match the Gunicorn worker
+socketio = SocketIO(app, async_mode='eventlet')
 
 # --- Storage Configuration ---
 STORAGE_DIR = os.getenv('RENDER_DISK_MOUNT_PATH', 'storage')
@@ -37,25 +42,33 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
-# --- Redis Listener Thread ---
+# --- Redis Listener (runs in a background greenlet) ---
 def redis_listener():
     """Listens for status updates from the worker and relays them to clients."""
-    pubsub = redis_client.pubsub()
-    pubsub.subscribe('status_updates')
-    logging.info("Redis listener started.")
-    for message in pubsub.listen():
-        if message['type'] == 'message':
-            try:
-                payload = json.loads(message['data'])
-                event = payload.get('event')
-                data = payload.get('data')
-                if event and data:
-                    socketio.emit(event, data)
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Could not decode message from Redis: {message['data']}")
+    while True:
+        try:
+            pubsub = redis_client.pubsub()
+            pubsub.subscribe('status_updates')
+            logging.info("Redis listener connected and subscribed.")
+            for message in pubsub.listen():
+                if message['type'] == 'message':
+                    try:
+                        payload = json.loads(message['data'])
+                        event = payload.get('event')
+                        data = payload.get('data')
+                        if event and data:
+                            socketio.emit(event, data)
+                    except (json.JSONDecodeError, TypeError):
+                        logging.warning(f"Could not decode message from Redis: {message['data']}")
+        except redis.exceptions.ConnectionError:
+            logging.error("Redis connection lost in listener. Reconnecting in 5s...")
+            time.sleep(5)
+        except Exception as e:
+            logging.error(f"Unexpected error in Redis listener: {e}. Restarting in 5s...")
+            time.sleep(5)
 
-# Start the listener in a background thread when the app starts
-threading.Thread(target=redis_listener, daemon=True).start()
+# Start the listener in a background greenlet managed by eventlet
+socketio.start_background_task(redis_listener)
 
 # --- Flask Routes ---
 @app.route('/')
@@ -80,7 +93,7 @@ def upload_file():
         redis_client.publish('download_jobs', torrent_path)
         logging.info(f"Published job for {filename} to Redis.")
 
-        # We need the file_name and info_hash for the UI, so we parse it here quickly
+        # Parse file for UI. This is safe because the file is on persistent storage.
         from bencode import bdecode, bencode
         import hashlib
         try:
@@ -90,8 +103,7 @@ def upload_file():
             info_hash = hashlib.sha1(bencode(info)).digest().hex()
             file_name_from_torrent = info[b'name'].decode('utf-8')
         except Exception:
-            # Fallback if parsing fails
-            info_hash = "unknown"
+            info_hash = "unknown-" + filename
             file_name_from_torrent = filename
 
         return jsonify({
