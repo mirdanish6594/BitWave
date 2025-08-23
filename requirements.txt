@@ -1,5 +1,4 @@
-aiohttp
-asyncio
-bencodepy
-bitstring
-logging
+Flask==3.0.3
+aiohttp==3.9.5
+Flask-SocketIO==5.3.6
+gunicorn==22.0.0

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BitWave Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        @keyframes gradient-animation {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .animated-gradient {
+            background: linear-gradient(-45deg, #1e3a8a, #3b82f6, #2563eb, #1d4ed8);
+            background-size: 400% 400%;
+            animation: gradient-animation 15s ease infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-start min-h-screen font-sans pt-10">
+
+    <div class="w-full max-w-2xl mx-auto p-8 bg-gray-800 rounded-2xl shadow-2xl border border-gray-700">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-blue-400">BitWave</h1>
+            <p class="text-gray-400 mt-2">Real-time Torrent Downloader</p>
+        </div>
+
+        <!-- Upload Form -->
+        <form action="/upload" method="post" enctype="multipart/form-data" id="upload-form" class="mb-8">
+             <div class="flex">
+                <label class="w-full flex items-center px-4 py-3 bg-gray-700 text-gray-400 rounded-lg shadow-lg tracking-wide uppercase border border-gray-600 cursor-pointer hover:bg-gray-600 hover:text-white transition-colors">
+                    <svg class="w-6 h-6 mr-3" fill="currentColor" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M16.88 9.1A4 4 0 0 1 16 17H5a5 5 0 0 1-1-9.9V7a3 3 0 0 1 4.52-2.59A4.98 4.98 0 0 1 17 8c0 .38-.04.74-.12 1.1zM11 11h3l-4 4-4-4h3V7h2v4z" /></svg>
+                    <span id="file-name-display" class="truncate">Choose a .torrent file...</span>
+                    <input type='file' name="torrent_file" id="torrent-file" class="hidden" accept=".torrent" required />
+                </label>
+            </div>
+            <button type="submit" id="submit-button" class="mt-4 w-full text-white font-bold py-3 px-4 rounded-lg animated-gradient transition-transform transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-500/50">
+                Start Download
+            </button>
+        </form>
+
+        <!-- Active Downloads Section -->
+        <div id="downloads-container">
+            <h2 id="downloads-header" class="text-2xl font-semibold text-gray-300 border-b-2 border-gray-600 pb-2 mb-4 hidden">Active Downloads</h2>
+            <div id="downloads-list" class="space-y-4">
+                <!-- Download items will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const socket = io();
+            const form = document.getElementById('upload-form');
+            const fileInput = document.getElementById('torrent-file');
+            const fileNameDisplay = document.getElementById('file-name-display');
+            const submitButton = document.getElementById('submit-button');
+            const downloadsList = document.getElementById('downloads-list');
+            const downloadsHeader = document.getElementById('downloads-header');
+
+            fileInput.addEventListener('change', () => {
+                fileNameDisplay.textContent = fileInput.files.length > 0 ? fileInput.files[0].name : 'Choose a .torrent file...';
+            });
+
+            form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                submitButton.disabled = true;
+                submitButton.textContent = 'Uploading...';
+                
+                const formData = new FormData(form);
+                fetch('/upload', { method: 'POST', body: formData })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(`Error: ${data.error}`);
+                        return;
+                    }
+                    addDownloadToList(data.info_hash, data.file_name);
+                })
+                .catch(error => console.error('Error:', error))
+                .finally(() => {
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Start Download';
+                    form.reset();
+                    fileNameDisplay.textContent = 'Choose a .torrent file...';
+                });
+            });
+
+            function addDownloadToList(infoHash, torrentFileName) {
+                downloadsHeader.classList.remove('hidden');
+                if (document.getElementById(infoHash)) return;
+
+                const itemHTML = `
+                    <div id="${infoHash}" class="bg-gray-700 p-4 rounded-lg shadow-md border border-gray-600">
+                        <p class="font-semibold text-blue-300 truncate" title="${torrentFileName}">${torrentFileName}</p>
+                        <div class="w-full bg-gray-600 rounded-full h-2.5 mt-2">
+                            <div id="progress-${infoHash}" class="bg-green-500 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                        <div class="flex justify-between text-xs text-gray-400 mt-2">
+                            <span id="percent-${infoHash}">0.00%</span>
+                            <div>
+                                <span id="peers-${infoHash}">Peers: 0</span> | 
+                                <span id="speed-${infoHash}">0.00 KB/s</span>
+                            </div>
+                        </div>
+                        <div id="status-${infoHash}" class="text-center text-yellow-400 font-semibold mt-2 text-sm">Initializing...</div>
+                    </div>
+                `;
+                downloadsList.insertAdjacentHTML('beforeend', itemHTML);
+            }
+
+            socket.on('connect', () => console.log('Connected to server via WebSocket.'));
+            
+            socket.on('status_update', (data) => {
+                const { info_hash, progress, peers, speed, final_status, file_name } = data;
+                
+                let downloadItem = document.getElementById(info_hash);
+                if (!downloadItem) {
+                    addDownloadToList(info_hash, file_name || 'Unknown File');
+                }
+
+                document.getElementById(`progress-${info_hash}`).style.width = `${progress}%`;
+                document.getElementById(`percent-${info_hash}`).textContent = `${progress}%`;
+                document.getElementById(`peers-${info_hash}`).textContent = `Peers: ${peers}`;
+                document.getElementById(`speed-${info_hash}`).textContent = `${speed} KB/s`;
+                
+                const statusEl = document.getElementById(`status-${info_hash}`);
+                if (final_status) {
+                    statusEl.textContent = final_status;
+                    statusEl.className = 'text-center font-semibold mt-2 text-sm ' + (final_status === 'Completed' ? 'text-green-400' : 'text-red-400');
+                    
+                    // --- NEW: Trigger browser download on completion ---
+                    if (final_status === 'Completed') {
+                        triggerBrowserDownload(file_name);
+                    }
+                } else {
+                    statusEl.textContent = 'Downloading...';
+                }
+            });
+
+            function triggerBrowserDownload(fileName) {
+                console.log(`Triggering browser download for ${fileName}`);
+                const link = document.createElement('a');
+                link.href = `/download/${encodeURIComponent(fileName)}`;
+                link.setAttribute('download', fileName); // Or a custom name
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        });
+    </script>
+</body>
+</html>
