@@ -5,7 +5,6 @@ import os
 import logging
 import threading
 import asyncio
-# --- NEW: Import send_from_directory ---
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
@@ -16,10 +15,21 @@ from bencode import bdecode, bencode
 
 # --- App Configuration ---
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['DOWNLOAD_FOLDER'] = 'downloads' # Define download folder
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')
+DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_DIR
+app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_DIR
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 socketio = SocketIO(app, async_mode='threading')
+
+# --- NEW: Create directories on startup, outside of the main block ---
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -82,8 +92,9 @@ def upload_file():
             return jsonify({'error': 'Could not parse torrent file.'}), 500
 
         start_download_in_background(torrent_path, socketio)
-
+        
         os.remove(torrent_path)
+
         return jsonify({
             'message': f'Download started for {filename}.',
             'info_hash': info_hash,
@@ -92,20 +103,15 @@ def upload_file():
     else:
         return jsonify({'error': 'Invalid file type.'}), 400
 
-# --- NEW: Route to serve the completed files ---
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    """Serves a completed file from the downloads directory."""
     logging.info(f"Browser requested download for: {filename}")
     return send_from_directory(
         app.config['DOWNLOAD_FOLDER'],
         filename,
-        as_attachment=True # This tells the browser to save the file
+        as_attachment=True
     )
 
 # --- Main Entry Point ---
 if __name__ == '__main__':
-    if not os.path.exists('uploads'): os.makedirs('uploads')
-    if not os.path.exists('downloads'): os.makedirs('downloads')
-        
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
