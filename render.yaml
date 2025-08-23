@@ -5,8 +5,8 @@ services:
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    # Use a threaded worker for stability with background tasks and a long timeout
-    startCommand: "gunicorn --workers 1 --threads 10 --timeout 120 app:socketio"
+    # This command is now correct because app.py is configured for gevent
+    startCommand: "gunicorn --worker-class gevent --timeout 120 app:socketio"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
