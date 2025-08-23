@@ -5,8 +5,8 @@ services:
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    # Use the new wsgi.py entry point for maximum stability
-    startCommand: "gunicorn --worker-class gevent -w 1 wsgi:app"
+    # Add a generous timeout to the start command
+    startCommand: "gunicorn --worker-class gevent -w 1 --timeout 120 wsgi:app"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
