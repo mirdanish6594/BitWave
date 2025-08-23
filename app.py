@@ -1,75 +1,61 @@
 # app.py
-# Main Flask application with SocketIO for real-time updates.
+# This is now just the web server. It handles uploads and relays status updates.
 
 import os
 import logging
 import threading
-import asyncio
-import time
+import json
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
-import hashlib
-
-from downloader import Downloader
-from bencode import bdecode, bencode
+import redis
 
 # --- App Configuration ---
 app = Flask(__name__)
+socketio = SocketIO(app, async_mode='threading')
 
-# --- Point all storage to the persistent disk mount path ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STORAGE_DIR = os.path.join(BASE_DIR, 'storage')
+# --- Storage Configuration ---
+STORAGE_DIR = os.getenv('RENDER_DISK_MOUNT_PATH', 'storage')
 UPLOAD_DIR = os.path.join(STORAGE_DIR, 'uploads')
 DOWNLOAD_DIR = os.path.join(STORAGE_DIR, 'downloads')
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_DIR
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_DIR
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-# The async_mode must be 'threading' to work with the background downloader
-socketio = SocketIO(app, async_mode='threading')
 
-# Create directories on startup to prevent FileNotFoundError
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
-if not os.path.exists(DOWNLOAD_DIR):
-    os.makedirs(DOWNLOAD_DIR)
+# Create directories on startup
+if not os.path.exists(UPLOAD_DIR): os.makedirs(UPLOAD_DIR)
+if not os.path.exists(DOWNLOAD_DIR): os.makedirs(DOWNLOAD_DIR)
+
+# --- Redis Connection ---
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
+redis_client = redis.from_url(REDIS_URL)
 
 # --- Logging Configuration ---
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
+    format='%(asctime)s - %(levelname)s - [WebApp] - %(message)s',
     datefmt='%H:%M:%S'
 )
 
-# --- Helper Functions ---
-def start_download_in_background(torrent_path, app_socketio):
-    def run_loop():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            downloader = Downloader(torrent_path, app_socketio)
-            loop.run_until_complete(downloader.start())
-        except Exception as e:
-            logging.error(f"Error in download thread: {e}", exc_info=True)
-        finally:
-            loop.close()
+# --- Redis Listener Thread ---
+def redis_listener():
+    """Listens for status updates from the worker and relays them to clients."""
+    pubsub = redis_client.pubsub()
+    pubsub.subscribe('status_updates')
+    logging.info("Redis listener started.")
+    for message in pubsub.listen():
+        if message['type'] == 'message':
+            try:
+                payload = json.loads(message['data'])
+                event = payload.get('event')
+                data = payload.get('data')
+                if event and data:
+                    socketio.emit(event, data)
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Could not decode message from Redis: {message['data']}")
 
-    thread = threading.Thread(target=run_loop, name=f"Downloader-{os.path.basename(torrent_path)}")
-    thread.start()
-    logging.info(f"Started download for {os.path.basename(torrent_path)} in background.")
-
-def get_torrent_info_hash(torrent_path):
-    try:
-        with open(torrent_path, 'rb') as f:
-            meta_info_bytes = f.read()
-        meta_info, _ = bdecode(meta_info_bytes)
-        info = meta_info[b'info']
-        info_hash = hashlib.sha1(bencode(info)).digest()
-        return info_hash.hex()
-    except Exception as e:
-        logging.error(f"Could not extract info_hash from {torrent_path}: {e}")
-        return None
+# Start the listener in a background thread when the app starts
+threading.Thread(target=redis_listener, daemon=True).start()
 
 # --- Flask Routes ---
 @app.route('/')
@@ -90,32 +76,32 @@ def upload_file():
         torrent_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(torrent_path)
         
-        # This small delay prevents a race condition on the server's filesystem
-        time.sleep(0.2) 
-        
-        info_hash = get_torrent_info_hash(torrent_path)
-        if not info_hash:
-            os.remove(torrent_path)
-            return jsonify({'error': 'Could not parse torrent file.'}), 500
+        # Publish a job to the Redis queue for the worker to pick up
+        redis_client.publish('download_jobs', torrent_path)
+        logging.info(f"Published job for {filename} to Redis.")
 
-        start_download_in_background(torrent_path, socketio)
-        
-        # The .torrent file is no longer needed after starting the download
-        os.remove(torrent_path)
+        # We need the file_name and info_hash for the UI, so we parse it here quickly
+        from bencode import bdecode, bencode
+        import hashlib
+        try:
+            with open(torrent_path, 'rb') as f: meta_info_bytes = f.read()
+            meta_info, _ = bdecode(meta_info_bytes)
+            info = meta_info[b'info']
+            info_hash = hashlib.sha1(bencode(info)).digest().hex()
+            file_name_from_torrent = info[b'name'].decode('utf-8')
+        except Exception:
+            # Fallback if parsing fails
+            info_hash = "unknown"
+            file_name_from_torrent = filename
 
         return jsonify({
-            'message': f'Download started for {filename}.',
+            'message': f'Download queued for {filename}.',
             'info_hash': info_hash,
-            'file_name': filename
+            'file_name': file_name_from_torrent
         })
     else:
         return jsonify({'error': 'Invalid file type.'}), 400
 
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    logging.info(f"Browser requested download for: {filename}")
-    return send_from_directory(
-        app.config['DOWNLOAD_FOLDER'],
-        filename,
-        as_attachment=True
-    )
+    return send_from_directory(app.config['DOWNLOAD_FOLDER'], filename, as_attachment=True)
