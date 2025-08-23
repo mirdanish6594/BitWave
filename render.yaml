@@ -5,13 +5,12 @@ services:
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    # Use a threaded worker, which is more stable for this app architecture
-    startCommand: "gunicorn --workers 1 --threads 10 --timeout 120 wsgi:app"
+    startCommand: "gunicorn --worker-class gevent -w 1 --timeout 120 wsgi:app"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
-    # A single persistent disk for all storage
+    # Mount the disk to a safe, user-owned location
     disks:
       - name: storage
-        mountPath: /var/data
+        mountPath: /opt/render/project/src/storage
         sizeGB: 1
