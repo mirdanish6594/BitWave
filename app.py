@@ -17,6 +17,7 @@ from bencode import bdecode, bencode
 # --- App Configuration ---
 app = Flask(__name__)
 
+# --- Point all storage to the persistent disk mount path ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STORAGE_DIR = os.path.join(BASE_DIR, 'storage')
 UPLOAD_DIR = os.path.join(STORAGE_DIR, 'uploads')
@@ -25,11 +26,10 @@ DOWNLOAD_DIR = os.path.join(STORAGE_DIR, 'downloads')
 app.config['UPLOAD_FOLDER'] = UPLOAD_DIR
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_DIR
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+# The async_mode must be 'threading' to work with the background downloader
+socketio = SocketIO(app, async_mode='threading')
 
-# --- CRITICAL FIX: Match the async_mode to the Gunicorn worker ---
-socketio = SocketIO(app, async_mode='gevent')
-
-# Create directories on startup
+# Create directories on startup to prevent FileNotFoundError
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 if not os.path.exists(DOWNLOAD_DIR):
@@ -45,10 +45,6 @@ logging.basicConfig(
 # --- Helper Functions ---
 def start_download_in_background(torrent_path, app_socketio):
     def run_loop():
-        # gevent needs to be patched for background threads to work with asyncio
-        from gevent import monkey
-        monkey.patch_all()
-        
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -94,6 +90,7 @@ def upload_file():
         torrent_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(torrent_path)
         
+        # This small delay prevents a race condition on the server's filesystem
         time.sleep(0.2) 
         
         info_hash = get_torrent_info_hash(torrent_path)
@@ -103,6 +100,7 @@ def upload_file():
 
         start_download_in_background(torrent_path, socketio)
         
+        # The .torrent file is no longer needed after starting the download
         os.remove(torrent_path)
 
         return jsonify({
