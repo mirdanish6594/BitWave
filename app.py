@@ -17,8 +17,9 @@ from bencode import bdecode, bencode
 # --- App Configuration ---
 app = Flask(__name__)
 
-# --- NEW: Point all storage to the persistent disk mount path ---
-STORAGE_DIR = '/var/data'
+# --- NEW: Point all storage to the safe, user-owned mount path ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STORAGE_DIR = os.path.join(BASE_DIR, 'storage')
 UPLOAD_DIR = os.path.join(STORAGE_DIR, 'uploads')
 DOWNLOAD_DIR = os.path.join(STORAGE_DIR, 'downloads')
 
