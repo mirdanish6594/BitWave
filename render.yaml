@@ -5,11 +5,11 @@ services:
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn --worker-class gevent -w 1 --bind 0.0.0.0:$PORT app:socketio"
+    # Use the gevent-websocket worker for maximum stability in production
+    startCommand: "gunicorn --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 --bind 0.0.0.0:$PORT app:socketio"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
-      # Adding another key for extra certainty
       - key: PYTHON
         value: 3.11.4
     # A Persistent Disk to store our downloads
