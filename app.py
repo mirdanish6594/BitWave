@@ -1,10 +1,6 @@
 # app.py
 # This is now just the web server. It handles uploads and relays status updates.
 
-# IMPORTANT: eventlet must be patched at the very top of the entry point
-import eventlet
-eventlet.monkey_patch()
-
 import os
 import logging
 import json
@@ -16,7 +12,7 @@ import time
 
 # --- App Configuration ---
 app = Flask(__name__)
-# The async_mode must be 'eventlet' to match the Gunicorn worker
+# The async_mode must be 'eventlet' to match our production server
 socketio = SocketIO(app, async_mode='eventlet')
 
 # --- Storage Configuration ---
@@ -89,7 +85,6 @@ def upload_file():
         torrent_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(torrent_path)
         
-        # Publish a job to the Redis queue for the worker to pick up
         redis_client.publish('download_jobs', torrent_path)
         logging.info(f"Published job for {filename} to Redis.")
 
@@ -116,3 +111,6 @@ def upload_file():
 @app.route('/download/<path:filename>')
 def download_file(filename):
     return send_from_directory(app.config['DOWNLOAD_FOLDER'], filename, as_attachment=True)
+
+# NOTE: The if __name__ == '__main__': block is intentionally removed.
+# The server is now started via the wsgi.py file.
