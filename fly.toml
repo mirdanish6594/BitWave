@@ -1,0 +1,34 @@
+# fly.toml app configuration file generated for bitwave
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'bitwave' # Make sure this matches your app name
+primary_region = 'maa' # Make sure this matches the region you chose
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Web server process
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+  processes = ["app"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+# This defines the web server process
+[processes]
+  app = "gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8080 app:app"
+  # This defines the background worker process
+  worker = "python worker.py"
+
+# This creates the persistent storage disk
+[mounts]
+  source="bitwave_storage"
+  destination="/app/storage"
