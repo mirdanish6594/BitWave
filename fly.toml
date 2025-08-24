@@ -2,6 +2,7 @@ app = "bitwave"
 primary_region = "bom"
 
 [env]
+  REDIS_URL = "redis://:password@<redis-host>:6379"
   RENDER_DISK_MOUNT_PATH = "/app/storage"
 
 [http_service]
@@ -19,7 +20,7 @@ primary_region = "bom"
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 1024
+  memory_mb = 2048
   processes = ["worker"]
 
 [processes]
