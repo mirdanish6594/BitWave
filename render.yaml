@@ -1,19 +1,19 @@
 services:
-  # 1. The Redis database for queuing jobs and status messages
+  # 1. The Redis database
   - type: redis
     name: redis-cache
     plan: free
-    ipAllowList: [] # Allow all services in the account to connect
+    ipAllowList: []
     maxmemoryPolicy: allkeys-lru
 
-  # 2. The Web Service (Flask App) for the user interface
+  # 2. The Web Service (Flask App)
   - type: web
     name: bitwave
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    # This is the correct, stable command for a production eventlet server
-    startCommand: "gunicorn --worker-class eventlet -w 1 --log-level info app:app"
+    # This command tells Gunicorn to run the app defined in our wsgi.py file
+    startCommand: "gunicorn wsgi:app"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
@@ -29,7 +29,7 @@ services:
         mountPath: /var/data/storage
         sizeGB: 1
 
-  # 3. The Background Worker to handle the actual downloads
+  # 3. The Background Worker
   - type: worker
     name: downloader-worker
     env: python
