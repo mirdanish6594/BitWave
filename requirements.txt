@@ -5,3 +5,5 @@ eventlet==0.35.2
 redis==5.0.7
 requests==2.32.3
 werkzeug
+bencodepy
+aiohttp
