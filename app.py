@@ -1,74 +1,75 @@
 # app.py
-# This is now just the web server. It handles uploads and relays status updates.
-
-# IMPORTANT: eventlet must be patched at the very top of the entry point
-import eventlet
-eventlet.monkey_patch()
+# Main Flask application with SocketIO for real-time updates.
 
 import os
 import logging
-import json
+import threading
+import asyncio
+import time
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
-import redis
-import time
+import hashlib
+
+from downloader import Downloader
+from bencode import bdecode, bencode
 
 # --- App Configuration ---
 app = Flask(__name__)
-# The async_mode must be 'eventlet' to match the Gunicorn worker
-socketio = SocketIO(app, async_mode='eventlet')
 
-# --- Storage Configuration ---
-STORAGE_DIR = os.getenv('RENDER_DISK_MOUNT_PATH', 'storage')
+# --- Point all storage to the persistent disk mount path ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STORAGE_DIR = os.path.join(BASE_DIR, 'storage')
 UPLOAD_DIR = os.path.join(STORAGE_DIR, 'uploads')
 DOWNLOAD_DIR = os.path.join(STORAGE_DIR, 'downloads')
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_DIR
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_DIR
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+# The async_mode must be 'threading' to work with the background downloader
+socketio = SocketIO(app, async_mode='threading')
 
-# Create directories on startup
-if not os.path.exists(UPLOAD_DIR): os.makedirs(UPLOAD_DIR)
-if not os.path.exists(DOWNLOAD_DIR): os.makedirs(DOWNLOAD_DIR)
-
-# --- Redis Connection ---
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
-redis_client = redis.from_url(REDIS_URL)
+# Create directories on startup to prevent FileNotFoundError
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
 
 # --- Logging Configuration ---
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - [WebApp] - %(message)s',
+    format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
     datefmt='%H:%M:%S'
 )
 
-# --- Redis Listener (runs in a background greenlet) ---
-def redis_listener():
-    """Listens for status updates from the worker and relays them to clients."""
-    while True:
+# --- Helper Functions ---
+def start_download_in_background(torrent_path, app_socketio):
+    def run_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            pubsub = redis_client.pubsub()
-            pubsub.subscribe('status_updates')
-            logging.info("Redis listener connected and subscribed.")
-            for message in pubsub.listen():
-                if message['type'] == 'message':
-                    try:
-                        payload = json.loads(message['data'])
-                        event = payload.get('event')
-                        data = payload.get('data')
-                        if event and data:
-                            socketio.emit(event, data)
-                    except (json.JSONDecodeError, TypeError):
-                        logging.warning(f"Could not decode message from Redis: {message['data']}")
-        except redis.exceptions.ConnectionError:
-            logging.error("Redis connection lost in listener. Reconnecting in 5s...")
-            time.sleep(5)
+            downloader = Downloader(torrent_path, app_socketio)
+            loop.run_until_complete(downloader.start())
         except Exception as e:
-            logging.error(f"Unexpected error in Redis listener: {e}. Restarting in 5s...")
-            time.sleep(5)
+            logging.error(f"Error in download thread: {e}", exc_info=True)
+        finally:
+            loop.close()
 
-# Start the listener in a background greenlet managed by eventlet
-socketio.start_background_task(redis_listener)
+    thread = threading.Thread(target=run_loop, name=f"Downloader-{os.path.basename(torrent_path)}")
+    thread.start()
+    logging.info(f"Started download for {os.path.basename(torrent_path)} in background.")
+
+def get_torrent_info_hash(torrent_path):
+    try:
+        with open(torrent_path, 'rb') as f:
+            meta_info_bytes = f.read()
+        meta_info, _ = bdecode(meta_info_bytes)
+        info = meta_info[b'info']
+        info_hash = hashlib.sha1(bencode(info)).digest()
+        return info_hash.hex()
+    except Exception as e:
+        logging.error(f"Could not extract info_hash from {torrent_path}: {e}")
+        return None
 
 # --- Flask Routes ---
 @app.route('/')
@@ -89,31 +90,35 @@ def upload_file():
         torrent_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(torrent_path)
         
-        # Publish a job to the Redis queue for the worker to pick up
-        redis_client.publish('download_jobs', torrent_path)
-        logging.info(f"Published job for {filename} to Redis.")
+        # This small delay prevents a race condition on the server's filesystem
+        time.sleep(0.2) 
+        
+        info_hash = get_torrent_info_hash(torrent_path)
+        if not info_hash:
+            os.remove(torrent_path)
+            return jsonify({'error': 'Could not parse torrent file.'}), 500
 
-        # Parse file for UI. This is safe because the file is on persistent storage.
-        from bencode import bdecode, bencode
-        import hashlib
-        try:
-            with open(torrent_path, 'rb') as f: meta_info_bytes = f.read()
-            meta_info, _ = bdecode(meta_info_bytes)
-            info = meta_info[b'info']
-            info_hash = hashlib.sha1(bencode(info)).digest().hex()
-            file_name_from_torrent = info[b'name'].decode('utf-8')
-        except Exception:
-            info_hash = "unknown-" + filename
-            file_name_from_torrent = filename
+        start_download_in_background(torrent_path, socketio)
+        
+        # The .torrent file is no longer needed after starting the download
+        os.remove(torrent_path)
 
         return jsonify({
-            'message': f'Download queued for {filename}.',
+            'message': f'Download started for {filename}.',
             'info_hash': info_hash,
-            'file_name': file_name_from_torrent
+            'file_name': filename
         })
     else:
         return jsonify({'error': 'Invalid file type.'}), 400
 
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    return send_from_directory(app.config['DOWNLOAD_FOLDER'], filename, as_attachment=True)
+    logging.info(f"Browser requested download for: {filename}")
+    return send_from_directory(
+        app.config['DOWNLOAD_FOLDER'],
+        filename,
+        as_attachment=True
+    )
+
+# NOTE: The if __name__ == '__main__': block is intentionally removed
+# as it is only for local development and conflicts with Gunicorn.
