@@ -17,12 +17,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
-      - key: REDIS_URL # This connects the web app to the Redis service
+      - key: REDIS_URL
         fromService:
           type: redis
           name: redis-cache
           property: connectionString
-      - key: RENDER_DISK_MOUNT_PATH # Pass the disk path to the app
+      - key: RENDER_DISK_MOUNT_PATH
         value: /var/data/storage
     disks:
       - name: storage
@@ -39,18 +39,18 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
-      - key: REDIS_URL # This connects the worker to the Redis service
+      - key: REDIS_URL
         fromService:
           type: redis
           name: redis-cache
           property: connectionString
-      - key: RENDER_DISK_MOUNT_PATH # The worker needs the same disk path
+      - key: RENDER_DISK_MOUNT_PATH
         fromService:
           type: web
           name: bitwave
           property: diskPath
     disks:
-      - name: storage # The worker needs access to the same disk
+      - name: storage
         fromService:
           type: web
           name: bitwave
