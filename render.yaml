@@ -12,12 +12,12 @@ services:
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    # Use the eventlet worker, which is the standard for Flask-SocketIO
+    # This is the correct, stable command for a production eventlet server
     startCommand: "gunicorn --worker-class eventlet -w 1 --log-level info app:app"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
-      - key: REDIS_URL
+      - key: REDIS_URL # This connects the web app to the Redis service
         fromService:
           type: redis
           name: redis-cache
@@ -39,7 +39,7 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
-      - key: REDIS_URL
+      - key: REDIS_URL # This connects the worker to the Redis service
         fromService:
           type: redis
           name: redis-cache
@@ -50,7 +50,7 @@ services:
           name: bitwave
           property: diskPath
     disks:
-      - name: storage
+      - name: storage # The worker needs access to the same disk
         fromService:
           type: web
           name: bitwave
