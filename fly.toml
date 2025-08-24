@@ -4,9 +4,6 @@
 app = 'bitwave' # Change this if you chose a different name on the website
 primary_region = 'bom' # Change this if you selected a different region
 
-[build]
-  dockerfile = "Dockerfile"
-
 # This defines the web server process that the public connects to
 [http_service]
   internal_port = 8080
