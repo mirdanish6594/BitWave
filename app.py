@@ -1,10 +1,12 @@
 # app.py
-# Main Flask application with SocketIO for real-time updates.
+# Final, stable version using a unified eventlet architecture.
+
+# IMPORTANT: eventlet must be patched at the very top of the entry point
+import eventlet
+eventlet.monkey_patch()
 
 import os
 import logging
-import threading
-import asyncio
 import time
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO
@@ -16,18 +18,17 @@ from bencode import bdecode, bencode
 
 # --- App Configuration ---
 app = Flask(__name__)
+# The async_mode must be 'eventlet' to match our production server
+socketio = SocketIO(app, async_mode='eventlet')
 
-# --- Point all storage to the persistent disk mount path ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STORAGE_DIR = os.path.join(BASE_DIR, 'storage')
+# --- Storage Configuration ---
+STORAGE_DIR = os.getenv('RENDER_DISK_MOUNT_PATH', 'storage')
 UPLOAD_DIR = os.path.join(STORAGE_DIR, 'uploads')
 DOWNLOAD_DIR = os.path.join(STORAGE_DIR, 'downloads')
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_DIR
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_DIR
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-# The async_mode must be 'threading' to work with the background downloader
-socketio = SocketIO(app, async_mode='threading')
 
 # Create directories on startup to prevent FileNotFoundError
 if not os.path.exists(UPLOAD_DIR):
@@ -43,21 +44,24 @@ logging.basicConfig(
 )
 
 # --- Helper Functions ---
-def start_download_in_background(torrent_path, app_socketio):
-    def run_loop():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            downloader = Downloader(torrent_path, app_socketio)
-            loop.run_until_complete(downloader.start())
-        except Exception as e:
-            logging.error(f"Error in download thread: {e}", exc_info=True)
-        finally:
-            loop.close()
-
-    thread = threading.Thread(target=run_loop, name=f"Downloader-{os.path.basename(torrent_path)}")
-    thread.start()
-    logging.info(f"Started download for {os.path.basename(torrent_path)} in background.")
+def run_download_task(torrent_path, app_socketio):
+    """
+    This function runs the downloader and handles cleanup.
+    It will be spawned in a background greenlet.
+    """
+    try:
+        downloader = Downloader(torrent_path, app_socketio)
+        downloader.start()  # This is now a blocking call within the greenlet
+    except Exception as e:
+        logging.error(f"Error in download greenlet: {e}", exc_info=True)
+    finally:
+        # Clean up the .torrent file after the download attempt is finished
+        if os.path.exists(torrent_path):
+            try:
+                os.remove(torrent_path)
+                logging.info(f"Cleaned up torrent file: {torrent_path}")
+            except OSError as e:
+                logging.error(f"Error cleaning up torrent file {torrent_path}: {e}")
 
 def get_torrent_info_hash(torrent_path):
     try:
@@ -65,8 +69,8 @@ def get_torrent_info_hash(torrent_path):
             meta_info_bytes = f.read()
         meta_info, _ = bdecode(meta_info_bytes)
         info = meta_info[b'info']
-        info_hash = hashlib.sha1(bencode(info)).digest()
-        return info_hash.hex()
+        info_hash = hashlib.sha1(bencode(info)).digest().hex()
+        return info_hash
     except Exception as e:
         logging.error(f"Could not extract info_hash from {torrent_path}: {e}")
         return None
@@ -98,10 +102,9 @@ def upload_file():
             os.remove(torrent_path)
             return jsonify({'error': 'Could not parse torrent file.'}), 500
 
-        start_download_in_background(torrent_path, socketio)
-        
-        # The .torrent file is no longer needed after starting the download
-        os.remove(torrent_path)
+        # Spawn the download task in a background greenlet managed by eventlet
+        socketio.start_background_task(run_download_task, torrent_path, socketio)
+        logging.info(f"Spawned download task for {filename}")
 
         return jsonify({
             'message': f'Download started for {filename}.',
