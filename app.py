@@ -18,11 +18,10 @@ from bencode import bdecode, bencode
 
 # --- App Configuration ---
 app = Flask(__name__)
-# The async_mode must be 'eventlet' to match our production server
 socketio = SocketIO(app, async_mode='eventlet')
 
 # --- Storage Configuration ---
-STORAGE_DIR = os.getenv('RENDER_DISK_MOUNT_PATH', 'storage')
+STORAGE_DIR = os.getenv('RENDER_DISK_MOUNT_PATH', '/app/storage')
 UPLOAD_DIR = os.path.join(STORAGE_DIR, 'uploads')
 DOWNLOAD_DIR = os.path.join(STORAGE_DIR, 'downloads')
 
@@ -31,10 +30,8 @@ app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_DIR
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 # Create directories on startup to prevent FileNotFoundError
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
-if not os.path.exists(DOWNLOAD_DIR):
-    os.makedirs(DOWNLOAD_DIR)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -45,17 +42,12 @@ logging.basicConfig(
 
 # --- Helper Functions ---
 def run_download_task(torrent_path, app_socketio):
-    """
-    This function runs the downloader and handles cleanup.
-    It will be spawned in a background greenlet.
-    """
     try:
         downloader = Downloader(torrent_path, app_socketio)
-        downloader.start()  # This is now a blocking call within the greenlet
+        downloader.start()
     except Exception as e:
         logging.error(f"Error in download greenlet: {e}", exc_info=True)
     finally:
-        # Clean up the .torrent file after the download attempt is finished
         if os.path.exists(torrent_path):
             try:
                 os.remove(torrent_path)
@@ -93,16 +85,13 @@ def upload_file():
         filename = secure_filename(file.filename)
         torrent_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(torrent_path)
-        
-        # This small delay prevents a race condition on the server's filesystem
-        time.sleep(0.2) 
+        time.sleep(0.2)
         
         info_hash = get_torrent_info_hash(torrent_path)
         if not info_hash:
             os.remove(torrent_path)
             return jsonify({'error': 'Could not parse torrent file.'}), 500
 
-        # Spawn the download task in a background greenlet managed by eventlet
         socketio.start_background_task(run_download_task, torrent_path, socketio)
         logging.info(f"Spawned download task for {filename}")
 
@@ -123,5 +112,4 @@ def download_file(filename):
         as_attachment=True
     )
 
-# NOTE: The if __name__ == '__main__': block is intentionally removed
-# as it is only for local development and conflicts with Gunicorn.
+# NOTE: Do NOT include if __name__ == '__main__' for Gunicorn/production

@@ -22,3 +22,6 @@ primary_region = 'bom'
 [processes]
   app = "gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8080 app:app"
   worker = "python worker.py"
+
+[env]
+  RENDER_DISK_MOUNT_PATH = "/app/storage"
